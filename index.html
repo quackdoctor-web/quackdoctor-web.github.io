@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quest 3 見開きブックリーダー (高精細・ぼやけ解消版)</title>
+  <!-- PDF.js & JSZip -->
+  <script src="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+  <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --panel: #1a1d27;
+      --panel-hover: #252a38;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --vr-accent: #10b981;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --border: #2e3446;
+    }
+
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif;
+      overflow: hidden;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ヘッダー */
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 16px;
+      background-color: var(--panel);
+      border-bottom: 1px solid var(--border);
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 1.05rem;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    button, .file-btn {
+      background-color: var(--panel-hover);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 0.92rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    button:hover, .file-btn:hover {
+      background-color: #32394c;
+    }
+
+    button:active, .file-btn:active {
+      transform: scale(0.97);
+    }
+
+    button.primary, .file-btn.primary {
+      background-color: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    button.primary:hover, .file-btn.primary:hover {
+      background-color: var(--accent-hover);
+    }
+
+    button.vr-btn {
+      background-color: var(--vr-accent);
+      border-color: var(--vr-accent);
+      color: #042f2e;
+      font-weight: 800;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    /* メインビューア領域 */
+    main {
+      position: relative;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: radial-gradient(circle at center, #1b1f2b 0%, #0b0d12 100%);
+    }
+
+    /* 初期ドロップ画面 */
+    #drop-zone {
+      position: absolute;
+      inset: 24px;
+      border: 2px dashed #4b5563;
+      border-radius: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      background: rgba(26, 29, 39, 0.85);
+      z-index: 10;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    #drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.15);
+    }
+
+    #drop-zone h2 {
+      margin: 0 0 8px;
+      font-size: 1.4rem;
+    }
+
+    #drop-zone p {
+      margin: 0 0 20px;
+      color: var(--muted);
+      max-width: 540px;
+      line-height: 1.6;
+    }
+
+    /* 見開きブックキャンバスのコンテナ */
+    #book-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px;
+    }
+
+    #spread-canvas {
+      max-width: 100%;
+      max-height: 100%;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.85);
+      border-radius: 4px;
+      background: #111;
+      object-fit: contain;
+    }
+
+    /* UI非表示モード */
+    body.ui-hidden header,
+    body.ui-hidden footer {
+      display: none !important;
+    }
+
+    body.ui-hidden #book-container {
+      padding: 0;
+    }
+
+    #btn-restore-ui {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      z-index: 40;
+      background: rgba(26, 29, 39, 0.75);
+      backdrop-filter: blur(6px);
+      border: 1px solid var(--border);
+      padding: 8px 14px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      display: none;
+      opacity: 0.65;
+    }
+
+    #btn-restore-ui:hover {
+      opacity: 1;
+    }
+
+    body.ui-hidden #btn-restore-ui {
+      display: inline-flex;
+    }
+
+    /* 左右タップ領域 */
+    .nav-zone {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 28%;
+      z-index: 5;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      padding: 20px;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    .nav-zone:hover {
+      opacity: 1;
+    }
+
+    .nav-left {
+      left: 0;
+      justify-content: flex-start;
+      background: linear-gradient(to right, rgba(0,0,0,0.35), transparent);
+    }
+
+    .nav-right {
+      right: 0;
+      justify-content: flex-end;
+      background: linear-gradient(to left, rgba(0,0,0,0.35), transparent);
+    }
+
+    .nav-badge {
+      background: rgba(15, 17, 23, 0.8);
+      border: 1px solid var(--border);
+      padding: 12px 16px;
+      border-radius: 999px;
+      font-size: 1.2rem;
+    }
+
+    /* フッター */
+    footer {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 18px;
+      background-color: var(--panel);
+      border-top: 1px solid var(--border);
+      z-index: 20;
+    }
+
+    input[type="range"] {
+      flex: 1;
+      accent-color: var(--accent);
+      height: 8px;
+      cursor: pointer;
+    }
+
+    #page-info {
+      font-variant-numeric: tabular-nums;
+      font-size: 0.92rem;
+      min-width: 110px;
+      text-align: right;
+    }
+
+    /* トースト */
+    #toast {
+      position: fixed;
+      bottom: 70px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(17, 24, 39, 0.95);
+      border: 1px solid #4b5563;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 12px;
+      font-size: 0.92rem;
+      max-width: 90vw;
+      z-index: 100;
+      display: none;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      line-height: 1.5;
+    }
+
+    /* ローディング */
+    #loader {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 17, 23, 0.85);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      gap: 12px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span>📖 Quest 3 見開きリーダー</span>
+  </div>
+  <div class="controls">
+    <label class="file-btn primary">
+      📂 ファイルを開く
+      <input type="file" id="file-input" accept=".pdf,.zip,.cbz,image/*" multiple />
+    </label>
+    <button type="button" id="btn-direction" title="綴じ方向の切り替え">右綴じ (←次へ)</button>
+    <button type="button" id="btn-cover" title="表紙を単独表示するか">表紙単独: ON</button>
+    <button type="button" id="btn-hide-ui" title="上下バーを隠す">🗖 UIを消す</button>
+    <button type="button" id="btn-fullscreen" title="全画面表示にする">⛶ 全画面</button>
+    <button type="button" id="btn-vr" class="vr-btn">🥽 VR空間で読む</button>
+  </div>
+</header>
+
+<button type="button" id="btn-restore-ui" title="UIを再表示">👁 UI表示</button>
+
+<main id="main-area">
+  <div id="drop-zone">
+    <h2>PDF・ZIP/CBZ・画像ファイルをここにドロップ</h2>
+    <p>
+      対応形式: <strong>.pdf</strong> / <strong>.zip</strong> / <strong>.cbz</strong> / <strong>.jpg, .webp, .png</strong>（複数選択可）<br />
+      VR空間ではコントローラーの<strong>スティック左右 / トリガー / A・Bボタン</strong>でページ送り、<br />
+      <strong>スティック上下</strong>で距離調整、<strong>グリップボタン</strong>でVR内UIの非表示切替ができます。
+    </p>
+    <label class="file-btn primary" style="font-size:1.05rem; padding:14px 24px;">
+      📂 本を選択する
+      <input type="file" id="file-input-center" accept=".pdf,.zip,.cbz,image/*" multiple />
+    </label>
+  </div>
+
+  <div class="nav-zone nav-left" id="zone-left"><div class="nav-badge">◀</div></div>
+  <div class="nav-zone nav-right" id="zone-right"><div class="nav-badge">▶</div></div>
+
+  <div id="book-container">
+    <canvas id="spread-canvas"></canvas>
+  </div>
+</main>
+
+<footer>
+  <button type="button" id="btn-prev">◀ 前へ</button>
+  <input type="range" id="page-slider" min="0" max="0" value="0" />
+  <button type="button" id="btn-next">次へ ▶</button>
+  <div id="page-info">0 / 0 ページ</div>
+</footer>
+
+<div id="loader">
+  <div style="font-size: 1.5rem;">⏳ 読み込み中...</div>
+  <div id="loader-text" style="color: var(--muted);">準備しています</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const state = {
+      mode: "none",
+      totalPages: 0,
+      currentIndex: 0,
+      spreads: [],
+      rtl: true,
+      singleCover: true,
+      pdfDoc: null,
+      imageItems: [],
+      vrSession: null,
+      vrDistance: 2.1,
+      vrShowHud: true,
+      isRendering: false
+    };
+
+    const spreadCanvas = document.getElementById("spread-canvas");
+    const ctx = spreadCanvas.getContext("2d", { alpha: false });
+    const dropZone = document.getElementById("drop-zone");
+    const pageSlider = document.getElementById("page-slider");
+    const pageInfo = document.getElementById("page-info");
+    const loader = document.getElementById("loader");
+    const loaderText = document.getElementById("loader-text");
+    const toast = document.getElementById("toast");
+    const btnVr = document.getElementById("btn-vr");
+    const btnFullscreen = document.getElementById("btn-fullscreen");
+
+    const backCanvas = document.createElement("canvas");
+    const backCtx = backCanvas.getContext("2d", { alpha: false });
+
+    let vrRenderer = null;
+
+    function showToast(msg, duration = 5000) {
+      toast.innerHTML = msg;
+      toast.style.display = "block";
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => {
+        toast.style.display = "none";
+      }, duration);
+    }
+
+    function showLoader(show, text = "") {
+      loader.style.display = show ? "flex" : "none";
+      loaderText.textContent = text;
+    }
+
+    document.getElementById("btn-hide-ui").addEventListener("click", () => {
+      document.body.classList.add("ui-hidden");
+    });
+
+    document.getElementById("btn-restore-ui").addEventListener("click", () => {
+      document.body.classList.remove("ui-hidden");
+    });
+
+    async function toggleFullscreen() {
+      try {
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+          const el = document.documentElement;
+          if (el.requestFullscreen) await el.requestFullscreen();
+          else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
+        } else {
+          if (document.exitFullscreen) await document.exitFullscreen();
+          else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+        }
+      } catch (e) {
+        document.body.classList.toggle("ui-hidden");
+      }
+    }
+
+    btnFullscreen.addEventListener("click", toggleFullscreen);
+
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+    function buildSpreads() {
+      state.spreads = [];
+      if (state.totalPages <= 0) return;
+
+      let i = 0;
+      if (state.singleCover) {
+        state.spreads.push([0]);
+        i = 1;
+      }
+      while (i < state.totalPages) {
+        if (i + 1 < state.totalPages) {
+          state.spreads.push([i, i + 1]);
+          i += 2;
+        } else {
+          state.spreads.push([i]);
+          i += 1;
+        }
+      }
+      state.currentIndex = Math.min(state.currentIndex, state.spreads.length - 1);
+      pageSlider.max = Math.max(0, state.spreads.length - 1);
+      pageSlider.value = state.currentIndex;
+    }
+
+    function cleanupResources() {
+      if (state.mode === "images") {
+        state.imageItems.forEach((item) => {
+          if (item.url) URL.revokeObjectURL(item.url);
+        });
+      }
+      state.imageItems = [];
+      state.pdfDoc = null;
+      state.totalPages = 0;
+    }
+
+    async function handleFiles(fileList) {
+      if (!fileList || fileList.length === 0) return;
+      const files = Array.from(fileList);
+
+      cleanupResources();
+      showLoader(true, "ファイルを解析しています...");
+
+      try {
+        const first = files[0];
+        const lowerName = first.name.toLowerCase();
+
+        if (files.length === 1 && lowerName.endsWith(".pdf")) {
+          if (!window.pdfjsLib) {
+            throw new Error("PDF読み込みライブラリのロードに失敗しました。");
+          }
+          const arrayBuffer = await first.arrayBuffer();
+          const loadingTask = window.pdfjsLib.getDocument({
+            data: new Uint8Array(arrayBuffer),
+            disableWorker: true
+          });
+          state.pdfDoc = await loadingTask.promise;
+          state.mode = "pdf";
+          state.totalPages = state.pdfDoc.numPages;
+        } else if (
+          files.length === 1 &&
+          (lowerName.endsWith(".zip") || lowerName.endsWith(".cbz"))
+        ) {
+          if (!window.JSZip) {
+            throw new Error("ZIP展開ライブラリのロードに失敗しました。");
+          }
+          const zip = await window.JSZip.loadAsync(first);
+          const entries = [];
+          zip.forEach((relativePath, zipEntry) => {
+            if (
+              !zipEntry.dir &&
+              !relativePath.startsWith("__MACOSX") &&
+              /\.(jpe?g|png|webp|gif|bmp)$/i.test(relativePath)
+            ) {
+              entries.push(zipEntry);
+            }
+          });
+          entries.sort((a, b) => collator.compare(a.name, b.name));
+
+          if (entries.length === 0) {
+            throw new Error("アーカイブ内に画像ファイルが見つかりませんでした。");
+          }
+
+          for (let i = 0; i < entries.length; i++) {
+            showLoader(true, `画像を展開中 (${i + 1} / ${entries.length})...`);
+            const blob = await entries[i].async("blob");
+            state.imageItems.push({
+              name: entries[i].name,
+              url: URL.createObjectURL(blob)
+            });
+          }
+          state.mode = "images";
+          state.totalPages = state.imageItems.length;
+        } else {
+          const imgFiles = files
+            .filter((f) => /\.(jpe?g|png|webp|gif|bmp)$/i.test(f.name) || f.type.startsWith("image/"))
+            .sort((a, b) => collator.compare(a.name, b.name));
+
+          if (imgFiles.length === 0) {
+            throw new Error("対応する画像またはPDF/ZIPファイルを選択してください。");
+          }
+
+          state.imageItems = imgFiles.map((f) => ({
+            name: f.name,
+            url: URL.createObjectURL(f)
+          }));
+          state.mode = "images";
+          state.totalPages = state.imageItems.length;
+        }
+
+        dropZone.style.display = "none";
+        state.currentIndex = 0;
+        buildSpreads();
+        await renderCurrentSpread();
+      } catch (err) {
+        console.error(err);
+        showToast("読み込みエラー: " + err.message, 6000);
+      } finally {
+        showLoader(false);
+      }
+    }
+
+    async function getPageDrawable(pageIndex) {
+      if (state.mode === "images") {
+        const item = state.imageItems[pageIndex];
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = item.url;
+        });
+      }
+      if (state.mode === "pdf") {
+        const page = await state.pdfDoc.getPage(pageIndex + 1);
+        // 画質を極限まで高めてぼやけを完全に防止するため 3.0倍スケールでレンダリング
+        const viewport = page.getViewport({ scale: 3.0 });
+        const c = document.createElement("canvas");
+        c.width = viewport.width;
+        c.height = viewport.height;
+        await page.render({
+          canvasContext: c.getContext("2d"),
+          viewport
+        }).promise;
+        return c;
+      }
+      return null;
+    }
+
+    async function renderCurrentSpread() {
+      if (state.spreads.length === 0 || state.isRendering) return;
+      state.isRendering = true;
+
+      try {
+        const pair = state.spreads[state.currentIndex];
+        pageSlider.value = state.currentIndex;
+
+        const pageLabels = pair.map((idx) => idx + 1).join("-");
+        pageInfo.textContent = `${pageLabels} / ${state.totalPages} P`;
+
+        const drawables = await Promise.all(pair.map((idx) => getPageDrawable(idx)));
+
+        if (drawables.length === 1) {
+          const d = drawables[0];
+          backCanvas.width = d.width;
+          backCanvas.height = d.height;
+          backCtx.fillStyle = "#ffffff";
+          backCtx.fillRect(0, 0, backCanvas.width, backCanvas.height);
+          backCtx.drawImage(d, 0, 0);
+        } else {
+          const leftDoc = state.rtl ? drawables[1] : drawables[0];
+          const rightDoc = state.rtl ? drawables[0] : drawables[1];
+
+          const h = Math.max(leftDoc.height, rightDoc.height);
+          const leftW = Math.round(leftDoc.width * (h / leftDoc.height));
+          const rightW = Math.round(rightDoc.width * (h / rightDoc.height));
+
+          backCanvas.width = leftW + rightW;
+          backCanvas.height = h;
+
+          backCtx.fillStyle = "#ffffff";
+          backCtx.fillRect(0, 0, backCanvas.width, backCanvas.height);
+          backCtx.drawImage(leftDoc, 0, 0, leftW, h);
+          backCtx.drawImage(rightDoc, leftW, 0, rightW, h);
+
+          const spineX = leftW;
+          const shadowW = Math.max(24, Math.round(backCanvas.width * 0.025));
+          const grad = backCtx.createLinearGradient(spineX - shadowW, 0, spineX + shadowW, 0);
+          grad.addColorStop(0, "rgba(0,0,0,0)");
+          grad.addColorStop(0.45, "rgba(0,0,0,0.22)");
+          grad.addColorStop(0.5, "rgba(0,0,0,0.42)");
+          grad.addColorStop(0.55, "rgba(0,0,0,0.22)");
+          grad.addColorStop(1, "rgba(0,0,0,0)");
+          backCtx.fillStyle = grad;
+          backCtx.fillRect(spineX - shadowW, 0, shadowW * 2, h);
+        }
+
+        spreadCanvas.width = backCanvas.width;
+        spreadCanvas.height = backCanvas.height;
+        ctx.drawImage(backCanvas, 0, 0);
+
+        if (vrRenderer) {
+          vrRenderer.needsTextureUpdate = true;
+          vrRenderer.needsHudUpdate = true;
+        }
+      } finally {
+        state.isRendering = false;
+      }
+    }
+
+    function goNext() {
+      if (state.currentIndex < state.spreads.length - 1) {
+        state.currentIndex++;
+        renderCurrentSpread();
+      }
+    }
+
+    function goPrev() {
+      if (state.currentIndex > 0) {
+        state.currentIndex--;
+        renderCurrentSpread();
+      }
+    }
+
+    const fileInput = document.getElementById("file-input");
+    const fileInputCenter = document.getElementById("file-input-center");
+
+    fileInput.addEventListener("change", (e) => {
+      handleFiles(e.target.files);
+      e.target.value = "";
+    });
+    fileInputCenter.addEventListener("change", (e) => {
+      handleFiles(e.target.files);
+      e.target.value = "";
+    });
+
+    document.getElementById("btn-direction").addEventListener("click", (e) => {
+      state.rtl = !state.rtl;
+      e.target.textContent = state.rtl ? "右綴じ (←次へ)" : "左綴じ (次へ→)";
+      renderCurrentSpread();
+    });
+
+    document.getElementById("btn-cover").addEventListener("click", (e) => {
+      state.singleCover = !state.singleCover;
+      e.target.textContent = state.singleCover ? "表紙単独: ON" : "表紙単独: OFF";
+      buildSpreads();
+      renderCurrentSpread();
+    });
+
+    document.getElementById("btn-prev").addEventListener("click", goPrev);
+    document.getElementById("btn-next").addEventListener("click", goNext);
+
+    document.getElementById("zone-left").addEventListener("click", () => {
+      state.rtl ? goNext() : goPrev();
+    });
+    document.getElementById("zone-right").addEventListener("click", () => {
+      state.rtl ? goPrev() : goNext();
+    });
+
+    pageSlider.addEventListener("input", (e) => {
+      state.currentIndex = parseInt(e.target.value, 10);
+      renderCurrentSpread();
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") state.rtl ? goNext() : goPrev();
+      if (e.key === "ArrowRight") state.rtl ? goPrev() : goNext();
+      if (e.key === "f" || e.key === "F") toggleFullscreen();
+    });
+
+    const mainArea = document.getElementById("main-area");
+    mainArea.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropZone.style.display = "flex";
+      dropZone.classList.add("dragover");
+    });
+    mainArea.addEventListener("dragleave", () => {
+      dropZone.classList.remove("dragover");
+      if (state.totalPages > 0) dropZone.style.display = "none";
+    });
+    mainArea.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropZone.classList.remove("dragover");
+      if (e.dataTransfer.files) handleFiles(e.dataTransfer.files);
+    });
+
+    // =========================================================================
+    // 高解像度・超クッキリWebXRイマーシブVRエンジン
+    // =========================================================================
+    btnVr.addEventListener("click", async () => {
+      if (state.vrSession) {
+        await state.vrSession.end();
+        return;
+      }
+
+      if (state.totalPages === 0) {
+        showToast("先に「ファイルを開く」からPDFや画像を選択してください。", 4000);
+        return;
+      }
+
+      if (!navigator.xr) {
+        showToast("⚠️ このブラウザ環境では WebXR が利用できません。", 5000);
+        return;
+      }
+
+      try {
+        let session;
+        try {
+          session = await navigator.xr.requestSession("immersive-vr", {
+            optionalFeatures: ["local-floor", "bounded-floor"]
+          });
+        } catch {
+          session = await navigator.xr.requestSession("immersive-vr");
+        }
+        startVRSession(session);
+      } catch (err) {
+        console.error("WebXR起動失敗:", err);
+        showToast("⚠️ <b>VR空間の起動に失敗しました:</b> " + err.message, 7000);
+      }
+    });
+
+    function startVRSession(session) {
+      state.vrSession = session;
+      btnVr.textContent = "🛑 VRを終了";
+
+      const glCanvas = document.createElement("canvas");
+      const gl =
+        glCanvas.getContext("webgl2", { xrCompatible: true, depth: true, antialias: true }) ||
+        glCanvas.getContext("webgl", { xrCompatible: true, depth: true, antialias: true });
+
+      const anisoExt =
+        gl.getExtension("EXT_texture_filter_anisotropic") ||
+        gl.getExtension("WEBKIT_EXT_texture_filter_anisotropic") ||
+        gl.getExtension("MOZ_EXT_texture_filter_anisotropic");
+      const maxAniso = anisoExt ? gl.getParameter(anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT) : 1;
+
+      const vsSource = `
+        attribute vec3 aPosition;
+        attribute vec2 aTexCoord;
+        uniform mat4 uProjection;
+        uniform mat4 uView;
+        varying vec2 vTexCoord;
+        void main() {
+          gl_Position = uProjection * uView * vec4(aPosition, 1.0);
+          vTexCoord = aTexCoord;
+        }
+      `;
+
+      const fsSource = `
+        precision mediump float;
+        uniform sampler2D uSampler;
+        varying vec2 vTexCoord;
+        void main() {
+          gl_FragColor = texture2D(uSampler, vTexCoord);
+        }
+      `;
+
+      function compileShader(type, src) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        return s;
+      }
+
+      const prog = gl.createProgram();
+      gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, vsSource));
+      gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fsSource));
+      gl.linkProgram(prog);
+      gl.useProgram(prog);
+
+      const posLoc = gl.getAttribLocation(prog, "aPosition");
+      const uvLoc = gl.getAttribLocation(prog, "aTexCoord");
+      const projLoc = gl.getUniformLocation(prog, "uProjection");
+      const viewLoc = gl.getUniformLocation(prog, "uView");
+
+      const screenPosBuf = gl.createBuffer();
+      const screenUvBuf = gl.createBuffer();
+      const screenIdxBuf = gl.createBuffer();
+
+      const hudPosBuf = gl.createBuffer();
+      const hudUvBuf = gl.createBuffer();
+      const hudIdxBuf = gl.createBuffer();
+
+      // クッキリ表示のため 8192×4096 の超高解像度テクスチャバッファを使用
+      const potCanvas = document.createElement("canvas");
+      const potCtx = potCanvas.getContext("2d", { alpha: false });
+
+      const screenTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, screenTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      if (anisoExt) {
+        gl.texParameterf(gl.TEXTURE_2D, anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, maxAniso);
+      }
+
+      const hudCanvas = document.createElement("canvas");
+      hudCanvas.width = 1024;
+      hudCanvas.height = 128;
+      const hudCtx = hudCanvas.getContext("2d");
+
+      const hudTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, hudTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+      vrRenderer = {
+        needsTextureUpdate: true,
+        needsHudUpdate: true,
+        lastAspect: 0,
+        lastDist: 0,
+        screenIndexCount: 0,
+        hudIndexCount: 0
+      };
+
+      function updateHudTexture() {
+        hudCtx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
+        hudCtx.fillStyle = "rgba(15, 23, 42, 0.9)";
+        hudCtx.beginPath();
+        hudCtx.roundRect(8, 8, 1008, 112, 56);
+        hudCtx.fill();
+        hudCtx.strokeStyle = "rgba(148, 163, 184, 0.5)";
+        hudCtx.lineWidth = 4;
+        hudCtx.stroke();
+
+        hudCtx.fillStyle = "#f8fafc";
+        hudCtx.font = "bold 44px sans-serif";
+        hudCtx.textAlign = "center";
+        hudCtx.textBaseline = "middle";
+        const dirText = state.rtl ? "右綴じ" : "左綴じ";
+        hudCtx.fillText(`${pageInfo.textContent}  |  ${dirText}  (グリップでUI非表示)`, 512, 66);
+
+        gl.bindTexture(gl.TEXTURE_2D, hudTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, hudCanvas);
+      }
+
+      function updateCurvedMesh(aspect, radius) {
+        const segX = 48;
+        const segY = 1;
+        const height = 1.65;
+        const width = height * aspect;
+        const arcAngle = Math.min(1.35, width / radius);
+
+        const positions = [];
+        const uvs = [];
+        const indices = [];
+
+        for (let iy = 0; iy <= segY; iy++) {
+          const v = iy / segY;
+          const y = (0.5 - v) * height + 1.38;
+          for (let ix = 0; ix <= segX; ix++) {
+            const u = ix / segX;
+            const theta = (u - 0.5) * arcAngle;
+            const x = Math.sin(theta) * radius;
+            const z = -Math.cos(theta) * radius;
+            positions.push(x, y, z);
+            uvs.push(u, v);
+          }
+        }
+
+        for (let iy = 0; iy < segY; iy++) {
+          for (let ix = 0; ix < segX; ix++) {
+            const a = iy * (segX + 1) + ix;
+            const b = a + 1;
+            const c = (iy + 1) * (segX + 1) + ix;
+            const d = c + 1;
+            indices.push(a, c, b, b, c, d);
+          }
+        }
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, screenPosBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, screenUvBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(uvs), gl.STATIC_DRAW);
+
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, screenIdxBuf);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+        vrRenderer.screenIndexCount = indices.length;
+
+        const hudY = 0.44;
+        const hudW = 0.85;
+        const hudH = 0.106;
+        const hudZ = -radius + 0.05;
+        const hPos = [
+          -hudW / 2, hudY + hudH / 2, hudZ,
+           hudW / 2, hudY + hudH / 2, hudZ,
+          -hudW / 2, hudY - hudH / 2, hudZ,
+           hudW / 2, hudY - hudH / 2, hudZ
+        ];
+        const hUv = [0, 0, 1, 0, 0, 1, 1, 1];
+        const hIdx = [0, 2, 1, 1, 2, 3];
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, hudPosBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(hPos), gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, hudUvBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(hUv), gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, hudIdxBuf);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(hIdx), gl.STATIC_DRAW);
+        vrRenderer.hudIndexCount = hIdx.length;
+
+        vrRenderer.lastAspect = aspect;
+        vrRenderer.lastDist = radius;
+      }
+
+      // 解像度スケールを 1.5倍（高解像度化）に引き上げてぼやけを完全に排除
+      const baseLayer = new XRWebGLLayer(session, gl, { depth: true, scaleFactor: 1.5 });
+      session.updateRenderState({ baseLayer });
+
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+      let refSpace;
+      session
+        .requestReferenceSpace("local-floor")
+        .catch(() => session.requestReferenceSpace("local"))
+        .then((space) => {
+          refSpace = space;
+          session.requestAnimationFrame(onXRFrame);
+        });
+
+      let inputCooldown = 0;
+
+      session.addEventListener("selectstart", (ev) => {
+        if (ev.inputSource.handedness === "left") {
+          state.rtl ? goNext() : goPrev();
+        } else {
+          state.rtl ? goPrev() : goNext();
+        }
+      });
+
+      session.addEventListener("squeezestart", () => {
+        state.vrShowHud = !state.vrShowHud;
+      });
+
+      session.addEventListener("end", () => {
+        state.vrSession = null;
+        vrRenderer = null;
+        btnVr.textContent = "🥽 VR空間で読む";
+      });
+
+      function onXRFrame(time, frame) {
+        if (!state.vrSession) return;
+        session.requestAnimationFrame(onXRFrame);
+
+        if (time > inputCooldown) {
+          for (const source of session.inputSources) {
+            if (!source.gamepad) continue;
+            const axes = source.gamepad.axes;
+            const buttons = source.gamepad.buttons;
+
+            const stickX = axes[2] !== undefined ? axes[2] : axes[0] || 0;
+            const stickY = axes[3] !== undefined ? axes[3] : axes[1] || 0;
+
+            if (stickX < -0.65) {
+              state.rtl ? goNext() : goPrev();
+              inputCooldown = time + 280;
+              break;
+            } else if (stickX > 0.65) {
+              state.rtl ? goPrev() : goNext();
+              inputCooldown = time + 280;
+              break;
+            }
+
+            if (Math.abs(stickY) > 0.5) {
+              state.vrDistance = Math.max(1.0, Math.min(4.5, state.vrDistance + stickY * 0.03));
+            }
+
+            if (buttons[4] && buttons[4].pressed) {
+              goNext();
+              inputCooldown = time + 280;
+              break;
+            }
+            if (buttons[5] && buttons[5].pressed) {
+              goPrev();
+              inputCooldown = time + 280;
+              break;
+            }
+          }
+        }
+
+        const pose = frame.getViewerPose(refSpace);
+        if (!pose) return;
+
+        const aspect = (spreadCanvas.width || 16) / (spreadCanvas.height || 9);
+        if (
+          Math.abs(aspect - vrRenderer.lastAspect) > 0.01 ||
+          Math.abs(state.vrDistance - vrRenderer.lastDist) > 0.01
+        ) {
+          updateCurvedMesh(aspect, state.vrDistance);
+        }
+
+        if (vrRenderer.needsTextureUpdate && spreadCanvas.width > 0) {
+          potCanvas.width = 8192;
+          potCanvas.height = 4096;
+          potCtx.imageSmoothingEnabled = true;
+          potCtx.imageSmoothingQuality = "high";
+          potCtx.drawImage(spreadCanvas, 0, 0, potCanvas.width, potCanvas.height);
+
+          gl.bindTexture(gl.TEXTURE_2D, screenTex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, potCanvas);
+          gl.generateMipmap(gl.TEXTURE_2D);
+          vrRenderer.needsTextureUpdate = false;
+        }
+
+        if (vrRenderer.needsHudUpdate) {
+          updateHudTexture();
+          vrRenderer.needsHudUpdate = false;
+        }
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, baseLayer.framebuffer);
+        gl.clearColor(0.03, 0.04, 0.06, 1.0);
+        gl.clearDepth(1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        gl.useProgram(prog);
+
+        for (const view of pose.views) {
+          const vp = baseLayer.getViewport(view);
+          gl.viewport(vp.x, vp.y, vp.width, vp.height);
+          gl.uniformMatrix4fv(projLoc, false, view.projectionMatrix);
+          gl.uniformMatrix4fv(viewLoc, false, view.transform.inverse.matrix);
+
+          gl.bindBuffer(gl.ARRAY_BUFFER, screenPosBuf);
+          gl.enableVertexAttribArray(posLoc);
+          gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+          gl.bindBuffer(gl.ARRAY_BUFFER, screenUvBuf);
+          gl.enableVertexAttribArray(uvLoc);
+          gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 0, 0);
+
+          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, screenIdxBuf);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, screenTex);
+          gl.drawElements(gl.TRIANGLES, vrRenderer.screenIndexCount, gl.UNSIGNED_SHORT, 0);
+
+          if (state.vrShowHud) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, hudPosBuf);
+            gl.enableVertexAttribArray(posLoc);
+            gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, hudUvBuf);
+            gl.enableVertexAttribArray(uvLoc);
+            gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 0, 0);
+
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, hudIdxBuf);
+            gl.bindTexture(gl.TEXTURE_2D, hudTex);
+            gl.drawElements(gl.TRIANGLES, vrRenderer.hudIndexCount, gl.UNSIGNED_SHORT, 0);
+          }
+        }
+      }
+    }
+  });
+</script>
+</body>
+</html>
